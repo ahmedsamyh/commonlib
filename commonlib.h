@@ -6,20 +6,18 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <ctype.h>
 #include <assert.h>
 #include <limits.h>
 
-#define COMMONLIB_VERSION "v0.1.13"
+#define COMMONLIB_VERSION "v0.1.14"
 
-#if defined(_WIN32) || defined(_MSC_VER)
-// TODO: Name collisions with raylib
-// NOTE: Don't include unwanted files to speed up compilation
+#if defined(_WIN32) || defined(__CYGWIN__)
 #define WIN32_LEAN_AND_MEAN
-#define NOCOMM
+#define NOGDI
+#define NOUSER
 #include <windows.h>
-#include <shlwapi.h>
-#undef C_ASSERT // Bruh
+#undef ASSERT  // clear windows' version
+#undef C_ASSERT  // clear windows' version
 #endif
 
 // Remove Prefix
@@ -72,6 +70,11 @@
 #define randomi c_randomi
 #define randomf c_randomf
 #define mapf    c_mapf
+#define ease_in_sine c_ease_in_sine
+#define ease_out_sine c_ease_out_sine
+#define ease_in_out_sine c_ease_in_out_sine
+#define ease_in_bounce c_ease_in_bounce
+#define ease_out_bounce c_ease_out_bounce
 
 #define String_builder c_String_builder
 #define sb_append c_sb_append
@@ -116,6 +119,9 @@
 #define sv_equals c_sv_equals
 #define sv_get_part c_sv_get_part
 #define sv_lpop_arg c_sv_lpop_arg
+
+#define str_starts_with c_str_starts_with
+#define str_ends_with c_str_ends_with
 
 #define SET_FLAG C_SET_FLAG
 #define UNSET_FLAG C_UNSET_FLAG
@@ -201,11 +207,17 @@ typedef const wchar* wstr;
 //
 // Math
 //
+#define C_PI 3.14159265359
 int   c_clampi(int v, int min, int max);
 float c_clampf(float v, float min, float max);
 float c_randomf(float from, float to);
 int   c_randomi(int from, int to);
 float c_mapf(float value, float from1, float to1, float from2, float to2);
+float c_ease_in_sine(float t);
+float c_ease_out_sine(float t);
+float c_ease_in_out_sine(float t);
+float c_ease_in_bounce(float t);
+float c_ease_out_bounce(float t);
 
 //
 // Struct pre-decls
@@ -267,7 +279,7 @@ typedef struct c_String_array c_String_array;
 #define c_darr_free(da) C_FREE((da).items)
 
 #define c_darr_remove_unordered(da, idx) do {\
-        if ((idx) >= 0 && (idx) <= (da).count-1) {\
+        if (((int)(idx) >= 0) && (idx) <= (da).count-1) {\
             (da).items[(idx)] = (da).items[(da).count-1];\
 			(da).count--;\
         } else {\
@@ -501,6 +513,13 @@ bool c_sv_equals(c_String_view sv1, c_String_view sv2);
 c_String_view c_sv_get_part(c_String_view sv, int from, int to);
 bool c_sv_lpop_arg(c_String_view *sv, c_String_view *out);
 
+//
+// String
+//
+
+bool c_str_starts_with(const char *str, const char *suffix);
+bool c_str_ends_with(const char* str, const char* preffix);
+
 #endif /* _COMMONLIB_H_ */
 
 //////////////////////////////////////////////////
@@ -509,6 +528,8 @@ bool c_sv_lpop_arg(c_String_view *sv, c_String_view *out);
 #include <errno.h>
 #include <stdlib.h>
 #include <assert.h>
+#include <math.h>
+#include <ctype.h>
 
 // My things implementation:
 
@@ -547,6 +568,37 @@ float c_mapf(float value, float from1, float to1, float from2, float to2) {
     return value;
 }
 
+float c_ease_in_sine(float t) {
+	return 1 - cosf((t * C_PI) / 2.f);
+}
+
+float c_ease_out_sine(float t) {
+	return sinf((t * C_PI) / 2);
+}
+
+float c_ease_in_out_sine(float t) {
+	return -(cosf(C_PI * t) - 1) / 2;
+}
+
+float c_ease_out_bounce(float x) {
+	const float n1 = 7.5625;
+	const float d1 = 2.75;
+
+	if (x < 1 / d1) {
+		return n1 * x * x;
+	} else if (x < 2 / d1) {
+		return n1 * (x - 1.5 / d1) * x + 0.75;
+	} else if (x < 2.5 / d1) {
+		return n1 * (x - 2.25 / d1) * x + 0.9375;
+	} else {
+		return n1 * (x - 2.625 / d1) * x + 0.984375;
+	}
+}
+
+float c_ease_in_bounce(float t) {
+	return 1 - c_ease_out_bounce(1 - t);
+}
+
 //
 // OS
 //
@@ -558,10 +610,12 @@ void c_os_get_timedate(c_Arena* a) {
 }
 
 bool c_os_file_exists(cstr filename) {
-    return PathFileExistsA(filename);
+    (void)filename;
+    return false;
 }
 
 c_String_array c_os_list_files(cstr dir) {
+    (void)dir;
     c_String_array res = {0};
     C_ASSERT(false, "UNIMPLEMENTED!");
     return res;
@@ -617,6 +671,7 @@ c_String_array c_os_list_files(cstr dir) {
 
     return res;
 }
+
 #endif
 
 // simple and dirty way to have defering in C (not recommended to use!)
@@ -1151,6 +1206,28 @@ bool c_sv_lpop_arg(c_String_view *sv, c_String_view *out) {
     }
     *out = (c_String_view){ .data = (char*)start_ptr, .count = (size_t)(sv->data - start_ptr) };
     return true;
+}
+
+//
+// String
+//
+
+bool c_str_starts_with(const char *str, const char *suffix) {
+    if (str == NULL) return false;
+    while (*str != 0 && *suffix != 0) {
+        if (*suffix++ != *str++) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool c_str_ends_with(const char* str, const char* prefix) {
+    if (str == NULL) return false;
+    size_t str_len = strlen(str);
+    size_t prefix_len = strlen(prefix);
+    if (prefix_len > str_len) return false;
+    return strcmp(str + str_len - prefix_len, prefix) == 0; 
 }
 
 #endif
