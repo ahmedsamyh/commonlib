@@ -1,7 +1,7 @@
 [[stdin]]
 
 [[expected_stdout]]
-[INFO] This file doesn't exist!?
+[INFO] This file (os_funcs.c) exists!
 
 [[expected_stderr]]
 
