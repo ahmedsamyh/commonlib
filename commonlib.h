@@ -8,6 +8,7 @@
 #include <string.h>
 #include <assert.h>
 #include <limits.h>
+#include <math.h>
 
 #define COMMONLIB_VERSION "v0.1.14"
 
