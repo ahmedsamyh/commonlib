@@ -22,10 +22,6 @@ jobs:
         run: |
           ls ./tests
 
-      - name: Install pip dependencies
-        run: |
-          pip install coloredlogs
-
       - name: Build
         run: |
           sh ./test.sh build -x
