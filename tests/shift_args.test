@@ -1,0 +1,19 @@
+[[stdin]]
+
+[[expected_stdout]]
+program: shift_args
+argc: 0
+argv: (null)
+
+[[expected_stderr]]
+
+[[expected_returncode]]
+0
+[[build_stdin]]
+
+[[expected_build_stdout]]
+
+[[expected_build_stderr]]
+
+[[expected_build_returncode]]
+0

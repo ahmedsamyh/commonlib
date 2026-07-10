@@ -3,14 +3,12 @@ import os
 import subprocess
 import sys
 import shlex
-import coloredlogs, logging
 
-from pathlib import Path
-
-# TODO: Remove the stdin, because we can pass that through BUILD_CMD and RUN_CMD
-
-'''-COLORED PRINT------------'''
 import sys
+
+# FLAG_VALUES
+verbose_output = False
+stop_on_error  = False
 
 colors_table = {
     'BLACK':   [ '30', '40' ],
@@ -39,38 +37,21 @@ def cprint(fg: str, bg: str, msg: str, file=sys.stdout, *args, **kwargs):
     set_color(fg, bg, file)
     print(msg, file=file, **kwargs)
     set_color(file=file)
-'''-------------------------'''
 
-CMD_LEVEL = 15
-logging.addLevelName(CMD_LEVEL, "CMD")
+def log_error(msg, file=sys.stdout, *args, **kwargs):
+    cprint('red', 'default', f"ERROR: {msg}", file=file, **kwargs)
 
-class MyLogger(logging.Logger):
-    def cmd(self, msg, *args, **kwargs):
-        if self.isEnabledFor(CMD_LEVEL):
-            self._log(CMD_LEVEL, msg, args, **kwargs)
+def log_info(msg, file=sys.stdout, *args, **kwargs):
+    cprint('green', 'default', f"INFO: {msg}", file=file, **kwargs)
 
+def log_warn(msg, file=sys.stdout, *args, **kwargs):
+    cprint('yellow', 'default', f"WARNING: {msg}", file=file, **kwargs)
 
-logging.setLoggerClass(MyLogger)
-
-logger = logging.getLogger('test')
-logger.setLevel(logging.DEBUG)
-
-coloredlogs.install(
-    level='DEBUG', 
-    fmt='%(name)s [%(levelname)s]: %(message)s',
-    level_styles={
-        'cmd': {'color': 'cyan'},  # Color for CMD level
-        'debug': {'color': 'white'},
-        'info': {'color': 'green'},
-        'warning': {'color': 'yellow'},
-        'error': {'color': 'red'},
-        'critical': {'color': 'magenta'},
-    },
-    field_styles={
-        'name': {'color': 'cyan'},
-        'levelname': {'bold': True},
-    }
-)
+def log_verbose(msg, file=sys.stdout, *args, **kwargs):
+    global verbose_output
+    if not verbose_output:
+        return
+    cprint('magenta', 'default', f"VERBOSE: {msg}", file=file, **kwargs)
 
 # TODO: Implement or Use a third-party diff-ing library
 
@@ -87,8 +68,6 @@ RUN_CMD="NOT SET"
 TESTS_DIR="NOT SET"
 # Suffix of the source files the build command iw (if there is a . prefix, it will be removed
 SRC_SUFFIX="NOT SET"
-
-script_dir = Path(__file__).resolve().parent
 
 def get_env_variables():
     global BUILD_CMD, RUN_CMD, TESTS_DIR, SRC_SUFFIX
@@ -109,7 +88,7 @@ def get_cmd_substituted(cmd, tests, current_test):
 
 def check_crucial_envvar(var, var_name):
     if var == "NOT SET":
-        logger.error(f"`{var_name}` environment variable not set! please provide a value and run again!")
+        log_error(f"`{var_name}` environment variable not set! please provide a value and run again!")
         exit(1)
 
 
@@ -124,90 +103,104 @@ def expect_output(expected_name: str, expected: str, got: str):
     print("<<<")
 
 
+TEST_SECTION_HEADER_BEG = '[['
+TEST_SECTION_HEADER_END = ']]'
 class Test:
-    stdin = ''
-    expected_stdout = ''
-    expected_stderr = ''
-    expected_returncode = -1
-
-    build_stdin = ''
-    build_expected_stdout = ''
-    build_expected_stderr = ''
-    build_expected_returncode = -1
-
     def __init__(self, name):
         self.name = name
+        self.d = {
+            "stdin": "",
+            "expected_stdout": "",
+            "expected_stderr": "",
+            "expected_returncode": -1,
 
-        def read_or_create_expected_file(name: str) -> str:
-            f = self.get_expected_filename(name)
-            if not os.path.exists(f):
-                with open(f, "w") as file:
-                    pass
-                    # NOTE: Why do we need to log this?
-                    # logger.info(f"Created empty {self.name}.{name}.expected")
-                return ""
-            else:
-                with open(f, "r") as file:
-                     return file.read()
+            "build_stdin": "",
+            "expected_build_stdout": "",
+            "expected_build_stderr": "",
+            "expected_build_returncode": -1,
+        }
 
-        self.stdin = read_or_create_expected_file("in")
-        self.expected_stdout = read_or_create_expected_file("out")
-        self.expected_stderr = read_or_create_expected_file("err")
-        self.expected_returncode = read_or_create_expected_file("code")
-        if self.expected_returncode == '':
-            self.expected_returncode = -1
-        else:
-            self.expected_returncode = int(self.expected_returncode)
 
-        self.build_stdin = read_or_create_expected_file("build.in")
-        self.build_expected_stdout = read_or_create_expected_file("build.out")
-        self.build_expected_stderr = read_or_create_expected_file("build.err")
-        self.build_expected_returncode = read_or_create_expected_file("build.code")
-        if self.build_expected_returncode == '':
-            self.build_expected_returncode = -1
-        else:
-            self.build_expected_returncode = int(self.build_expected_returncode)
+        self.load_expected()
 
-        # if self.expected_stdout: print(f"{self.name}.out.expected: {self.expected_stdout}")
-        # if self.expected_stderr: print(f"{self.name}.err.expected: {self.expected_stderr}")
+    def __repr__(self):
+        return f'''
+        stdin: {self.d['stdin']},
+        expected_stdout: {self.d['expected_stdout']},
+        expected_stderr: {self.d['expected_stderr']},
+        expected_returncode: {self.d['expected_returncode']},
+
+        build_stdin: {self.d['build_stdin']},
+        expected_build_stdout: {self.d['expected_build_stdout']},
+        expected_build_stderr: {self.d['expected_build_stderr']},
+        expected_build_returncode: {self.d['expected_build_returncode']},
+        '''
+
     def save_expected(self):
-        def write_expected(name: str, content: str):
-            f = self.get_expected_filename(name)
-            with open(f, "w") as file:
-                file.write(content)
+        filename: str = f"{self.name}.test"
+        f = open(filename, "w")
+        def write_section(section: str):
+            f.write(f"{TEST_SECTION_HEADER_BEG}{section}{TEST_SECTION_HEADER_END}\n")
+            f.write(f"{self.d[section]}\n")
 
-        write_expected("in", self.stdin)
-        write_expected("out", self.expected_stdout)
-        write_expected("err", self.expected_stderr)
-        write_expected("code", str(self.expected_returncode))
+        write_section("stdin")
+        write_section("expected_stdout")
+        write_section("expected_stderr")
+        write_section("expected_returncode")
 
-        write_expected("build.in", self.build_stdin)
-        write_expected("build.out", self.build_expected_stdout)
-        write_expected("build.err", self.build_expected_stderr)
-        write_expected("build.code", str(self.build_expected_returncode))
+        write_section("build_stdin")
+        write_section("expected_build_stdout")
+        write_section("expected_build_stderr")
+        write_section("expected_build_returncode")
+        f.close()
 
-    def get_expected_filename(self, name):
-        if name not in [ "in", "out", "err", "code", "build.in", "build.out", "build.err", "build.code" ]:
-            raise Exception("Please pass a valid name")
-            
-        return f".{self.name}.{name}.expected"
+    def load_expected(self):
+        filename: str = f"{self.name}.test"
+        if not os.path.exists(filename):
+            with open(filename, "w") as file:
+                pass
+            return
+        with open(filename, "r") as f:
+            current_section: str = ""
+            for line in f.readlines():
+                line = line.rstrip('\n')
+                if len(line) <= 0: continue
+                # print(f"LINE: `{line}`") continue
+                if line.startswith(TEST_SECTION_HEADER_BEG) and line.endswith(TEST_SECTION_HEADER_END):
+                    section: str = line.removeprefix('[[').removesuffix(']]')
+                    # print(f"Got section `{section}`")
+                    current_section = section
+                else:
+                    data = line
+                    if current_section not in self.d:
+                        log_error(f"{current_section} is not a valid section!")
+                        exit(1)
+                    else:
+                        if current_section.find("returncode") != -1:
+                            try:
+                                self.d[current_section] = int(data)
+                            except ValueError:
+                                log_error(f"{data} is not a valid returncode bruh!")
+                                exit(1)
+                        else:
+                            self.d[current_section] += data + "\n"
 
     def get_build_stdin_list(self):
-            build_input_array = self.build_stdin.split(sep=' ')
-            for i in range(len(build_input_array)-1, -1, -1):
-                if len(build_input_array[i]) <= 0:
-                    build_input_array.pop(i)
-            return build_input_array
+        build_input_array = self.d["build_stdin"].split(sep=' ')
+        for i in range(len(build_input_array)-1, -1, -1):
+            if len(build_input_array[i]) <= 0:
+                build_input_array.pop(i)
+        return build_input_array
 
     def get_stdin_list(self):
-            input_array = self.stdin.split(sep=' ')
-            for i in range(len(input_array)-1, -1, -1):
-                if len(input_array[i]) <= 0:
-                    input_array.pop(i)
-            return input_array
+        input_array = self.d['stdin'].split(sep=' ')
+        for i in range(len(input_array)-1, -1, -1):
+            if len(input_array[i]) <= 0:
+                input_array.pop(i)
+        return input_array
 
 def usage(program: str):
-    logger.info(f"Usage: {program} <subcmd> [flags]")
+    log_info(f"Usage: {program} <subcmd> [flags]")
 
 # NOTE: We named this hhelp because help is a builtin python function
 def hhelp():
@@ -228,18 +221,16 @@ def hhelp():
           ''')
 
 def main():
+    global verbose_output, stop_on_error
     program = sys.argv.pop(0)
 
     if len(sys.argv) <= 0:
-        logger.error("Please provide at least one subcommand!")
+        log_error("Please provide at least one subcommand!")
         usage(program)
         hhelp()
         exit(1)
 
 
-    # FLAG_VALUES
-    verbose_output = False
-    stop_on_error  = False
 
     subcmds = []
 
@@ -260,17 +251,17 @@ def main():
                 stop_on_error = True
             elif flag == 't':
                 if len(sys.argv) <= 0:
-                    logger.error(f"Please provide the name of the test after {flag_with_prefix}")
+                    log_error(f"Please provide the name of the test after {flag_with_prefix}")
                     exit(1)
                 test_name = sys.argv.pop(0)
             else:
-                logger.error(f"Invalid flag '{flag}'")
+                log_error(f"Invalid flag '{flag}'")
                 exit(1)
         else:
             subcmds.append(arg)
 
     if len(subcmds) <= 0:
-        logger.error("Please provide at least one subcommand!")
+        log_error("Please provide at least one subcommand!")
         usage(program)
         hhelp()
         exit(1)
@@ -280,8 +271,8 @@ def main():
     check_crucial_envvar(TESTS_DIR, "TESTS_DIR")
     check_crucial_envvar(SRC_SUFFIX, "SRC_SUFFIX")
 
-    os.chdir(script_dir / TESTS_DIR)
-    if verbose_output: logger.info(f"Changed cwd to {os.getcwd()}")
+    os.chdir(TESTS_DIR)
+    log_verbose(f"Changed cwd to {os.getcwd()}")
 
     tests = {}
 
@@ -290,13 +281,14 @@ def main():
         base_name = e.removesuffix("." + SRC_SUFFIX)
         if not tests.get(base_name):
             tests[base_name] = Test(base_name)
+            # print(f"TEST: {tests[base_name]}")
 
     # User wanted to test a specific test_name
     if test_name != None:
         # Remove suffix
         test_name = test_name.removesuffix(SRC_SUFFIX)
         if test_name not in tests:
-            logger.error(f"{test_name} is not a valid test!")
+            log_error(f"{test_name} is not a valid test!")
             exit(1)
 
         new_tests = tests.copy()
@@ -316,9 +308,9 @@ def main():
         passing_tests_count = 0
 
         if subcmd == "list":
-            logger.info("Tests: ")
+            log_info("Tests: ")
             for t in tests:
-                logger.info(f"-> {t}")
+                log_info(f"-> {t}")
         elif subcmd == "help":
             hhelp()
             exit(0)
@@ -330,9 +322,9 @@ def main():
                 current_test_id += 1
                 test = tests[test_name]
 
-                if test.build_expected_returncode == -1:
-                    logger.warning(f"Test doesn't have any expected build returncode!")
-                    logger.warning(f"Please record the expected build behaviour of the test using the 'record_build' subcommand!")
+                if test.d["expected_build_returncode"] == -1:
+                    log_warn(f"Test doesn't have any expected build returncode!")
+                    log_warn(f"Please record the expected build behaviour of the test using the 'record_build' subcommand!")
                     cprint('yellow', 'default', f"[SKIPPING]...")
                     if stop_on_error: exit(1)
                     continue
@@ -340,37 +332,37 @@ def main():
                 cmd = shlex.split(get_cmd_substituted(BUILD_CMD, tests, test_name))
                 build_stdin_list = test.get_build_stdin_list()
                 if len(build_stdin_list) > 0: cmd.extend(build_stdin_list)
-                # vlog(verbose_output, f"[CMD] {cmd}")
+                log_verbose(f"[CMD] {cmd}")
                 res = subprocess.run(cmd, capture_output = True, text = True)
                 if res.returncode != 0:
                     m = ''
                     if res.stderr:
                         m += f"{res.stderr}"
-                    logger.error(f"[FAILED] {m}")
+                    log_error(f"[FAILED] {m}")
 
                     if stop_on_error: exit(1)
                     else: continue
                 else:
                     failed = False
-                    if res.stdout != test.build_expected_stdout:
+                    if res.stdout != test.d["expected_build_stdout"]:
                         cprint('red', 'default', f'[FAILED]')
-                        expect_output("stdout", test.build_expected_stdout, res.stdout)
+                        expect_output("stdout", test.d["expected_build_stdout"], res.stdout)
                         failed = True
                         if stop_on_error: exit(1)
-                    if res.stderr != test.build_expected_stderr:
+                    if res.stderr != test.d["expected_build_stderr"]:
                         cprint('red', 'default', f'[FAILED]')
-                        expect_output("stderr", test.build_expected_stderr, res.stderr)
+                        expect_output("stderr", test.d["expected_build_stderr"], res.stderr)
                         failed = True
                         if stop_on_error: exit(1)
                     if not failed:
                         passing_tests_count += 1
                         cprint('green', 'default', "[PASS] ")
                     o = False
-                    if verbose_output and res.stdout:
-                        print(f"{res.stdout}")
+                    if res.stdout:
+                        log_verbose(f"{res.stdout}")
                         o = True
-                    if verbose_output and res.stderr:
-                        print(f"{res.stderr}")
+                    if res.stderr:
+                        log_verbose(f"{res.stderr}")
                         o = True
                     if not o: print('')
 
@@ -385,20 +377,20 @@ def main():
                 res = None
                 try:
                     cmd = shlex.split(get_cmd_substituted(RUN_CMD, tests, test_name))
-                    # vlog(verbose_output, f"[CMD] {cmd}")
+                    log_verbose(f"[CMD] {cmd}")
                     res = subprocess.run(cmd, capture_output = True, text = True)
                 except Exception as e:
-                    logger.error(f"Failed to run ./{test_name}: {e}")
+                    log_error(f"Failed to run ./{test_name}: {e}")
                     if stop_on_error: exit(1)
                     else: continue
 
-                if test.expected_returncode == -1:
-                    logger.warning(f"Test doesn't have any expected returncode!")
-                    logger.warning(f"Please record the expected behaviour of the test using the 'record' subcommand!")
+                if test.d['expected_returncode'] == -1:
+                    log_warn(f"Test doesn't have any expected returncode!")
+                    log_warn(f"Please record the expected behaviour of the test using the 'record' subcommand!")
 
-                if res.stdout != test.expected_stdout:
+                if res.stdout != test.d['expected_stdout']:
                     cprint('red', 'default', f'[FAILED]')
-                    expect_output("stdout", test.expected_stdout, res.stdout)
+                    expect_output("stdout", test.d['expected_stdout'], res.stdout)
                     if stop_on_error: exit(1)
                     else: continue
                 passing_tests_count += 1
@@ -415,7 +407,7 @@ def main():
                 cmd = shlex.split(get_cmd_substituted(RUN_CMD, tests, test_name))
                 stdin_list = test.get_stdin_list()
                 if len(stdin_list) > 0: cmd.extend(stdin_list)
-                # vlog(verbose_output, f"[CMD] {cmd}")
+                log_verbose(f"[CMD] {cmd}")
                 res = subprocess.run([f"./{test_name}"], capture_output = True, text = True)
 
                 print(f"stdout: {res.stdout}")
@@ -426,9 +418,9 @@ def main():
                 ans = input(prompt_msg)
 
                 if ans.lower() == "y":
-                    tests[test_name].expected_stdout = res.stdout
-                    tests[test_name].expected_stderr = res.stderr
-                    tests[test_name].expected_returncode = res.returncode
+                    tests[test_name].d["expected_stdout"] = res.stdout
+                    tests[test_name].d["expected_stderr"] = res.stderr
+                    tests[test_name].d["expected_returncode"] = res.returncode
                     tests[test_name].save_expected()
                     cprint("green", "default", '[SUCCESS] Recorded expected behaviour')
                 else:
@@ -440,21 +432,21 @@ def main():
                 cprint(f"green", "default", f"+ Recording expected build behaviour for '{test_name}'...")
                 test = tests[test_name]
 
-                if len(test.build_stdin) > 0:
-                    logger.info(f"Test already has build_input '{test.build_stdin}'...")
+                if len(test.d["build_stdin"]) > 0:
+                    log_info(f"Test already has build_input '{test.d['build_stdin']}'...")
                     ans = input("Do you want to change the build_input? [y/N]")
                     if ans.lower() == 'y':
-                        test.build_stdin = input("What is the input passed? ")
+                        test.d["build_stdin"] = input("What is the input passed? ")
                     else:
                         cprint('yellow', 'default', '[SKIP]')
                         continue
                 else:
-                    test.build_stdin = input("What is the input passed? ")
+                    test.d["build_stdin"] = input("What is the input passed? ")
 
                 cmd = shlex.split(get_cmd_substituted(BUILD_CMD, tests, test_name))
                 build_stdin_list = test.get_build_stdin_list()
                 if len(build_stdin_list) > 0: cmd.extend(build_stdin_list)
-                # vlog(verbose_output, f"[CMD] {cmd}")
+                log_verbose(f"[CMD] {cmd}")
                 res = subprocess.run(cmd, capture_output = True, text = True)
 
                 print(f"stdout: {res.stdout}")
@@ -465,16 +457,16 @@ def main():
                 ans = input(prompt_msg)
 
                 if ans.lower() == "y":
-                    tests[test_name].build_expected_stdout = res.stdout
-                    tests[test_name].build_expected_stderr = res.stderr
-                    tests[test_name].build_expected_returncode = res.returncode
+                    tests[test_name].d["expected_build_stdout"] = res.stdout
+                    tests[test_name].d["expected_build_stderr"] = res.stderr
+                    tests[test_name].d["expected_build_returncode"] = res.returncode
                     tests[test_name].save_expected()
                     cprint('green', 'default', '[SUCCESS] Recorded expected behaviour')
                 else:
                     cprint('yellow', 'default', '[SKIP]')
 
         else:
-            logger.error(f"Invalid subcommand '{subcmd}'")
+            log_error(f"Invalid subcommand '{subcmd}'")
             exit(1)
 
 if __name__ == "__main__":

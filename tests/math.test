@@ -1,0 +1,22 @@
+[[stdin]]
+
+[[expected_stdout]]
+[INFO] i: 11
+[INFO] clamped to 0 ~ 10: 10
+[INFO] f: -0.500000
+[INFO] clamped to 0.0 ~ 1.0: 0.000000
+[INFO] MAX(1, 2): 2
+[INFO] MIN(231, 123): 123
+
+[[expected_stderr]]
+
+[[expected_returncode]]
+0
+[[build_stdin]]
+
+[[expected_build_stdout]]
+
+[[expected_build_stderr]]
+
+[[expected_build_returncode]]
+0

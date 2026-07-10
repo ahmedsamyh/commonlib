@@ -1,0 +1,23 @@
+[[stdin]]
+
+[[expected_stdout]]
+[INFO] STACK:
+[INFO] arr: 0, 1024 
+[INFO] arr: 3, 1024 
+[INFO] HEAP:
+[INFO] harr: 0, 2048 
+[INFO] harr: 3, 2048 
+[INFO] harr.count after remove: 2
+
+[[expected_stderr]]
+
+[[expected_returncode]]
+0
+[[build_stdin]]
+
+[[expected_build_stdout]]
+
+[[expected_build_stderr]]
+
+[[expected_build_returncode]]
+0
